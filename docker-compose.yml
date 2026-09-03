@@ -1,0 +1,33 @@
+services:
+  # redis:8-alpine, no redis:alpine a secas: el checkpointer de LangGraph
+  # necesita RedisJSON y RediSearch, que Redis 8 trae de fábrica.
+  redis:
+    image: redis:8-alpine
+    container_name: entrega7-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    container_name: entrega7-api
+    env_file:
+      - .env
+    environment:
+      # Pisa el REDIS_URL del .env: dentro de la red de compose el host es
+      # "redis", no "localhost". Así el mismo .env sirve adentro y afuera.
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  redis-data:

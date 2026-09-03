@@ -1,0 +1,15 @@
+# API y capa de producción (Entrega 7)
+fastapi>=0.115
+uvicorn[standard]>=0.30
+redis>=5.2.1
+langgraph-checkpoint-redis>=0.5.2
+httpx>=0.28
+
+# Orquestador multi-agente (Entrega 6)
+langgraph>=1.2
+langgraph-prebuilt>=1.1
+langchain-core>=1.6
+langchain-anthropic>=1.7
+langchain-tavily>=0.2.18
+pydantic>=2.0
+python-dotenv>=1.0
