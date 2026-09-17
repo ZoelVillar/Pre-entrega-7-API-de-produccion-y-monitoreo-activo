@@ -1,15 +1,22 @@
+# Requiere Python 3.12 (la misma versión del Dockerfile: python:3.12-slim).
+#
+# Versiones fijadas con `==`, no `>=`: son exactamente las que produjeron las
+# capturas de /screenshots. Con rangos abiertos, un `pip install` hecho meses
+# después puede traer una versión incompatible y romper la reproducibilidad.
+# Sólo se fijan las dependencias directas; las transitivas las resuelve pip.
+
 # API y capa de producción (Entrega 7)
-fastapi>=0.115
-uvicorn[standard]>=0.30
-redis>=5.2.1
-langgraph-checkpoint-redis>=0.5.2
-httpx>=0.28
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+redis==8.1.0
+langgraph-checkpoint-redis==0.5.2
+httpx==0.28.1
 
 # Orquestador multi-agente (Entrega 6)
-langgraph>=1.2
-langgraph-prebuilt>=1.1
-langchain-core>=1.6
-langchain-anthropic>=1.7
-langchain-tavily>=0.2.18
-pydantic>=2.0
-python-dotenv>=1.0
+langgraph==1.2.11
+langgraph-prebuilt==1.1.0
+langchain-core==1.6.1
+langchain-anthropic==1.7.1
+langchain-tavily==0.2.18
+pydantic==2.13.5
+python-dotenv==1.2.3

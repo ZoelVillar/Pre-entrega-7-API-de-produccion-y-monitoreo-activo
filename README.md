@@ -1,9 +1,6 @@
 # Pre-entrega 7 — API de producción y monitoreo activo
 
 API REST asíncrona (FastAPI) sobre el orquestador multi-agente jerárquico de la Entrega 6.
-La lógica de negocio del grafo no cambió: lo nuevo es la capa que la vuelve un servicio —
-encolado no bloqueante, estado y checkpoints en Redis, trazas en LangSmith y una pausa
-obligatoria de aprobación humana antes de ejecutar la acción con efecto secundario.
 
 ---
 
@@ -24,7 +21,7 @@ obligatoria de aprobación humana antes de ejecutar la acción con efecto secund
 
 ### El grafo
 
-Topología heredada de la Entrega 6 (Supervisor + 2 especialistas, con el Supervisor como único
+Topología que usé en la Entrega 6 (Supervisor + 2 especialistas, con el Supervisor como único
 router), más el nodo `publicador` que introduce esta entrega:
 
 ```mermaid
@@ -224,6 +221,14 @@ igual que `POST /tasks`.
 
 ## Flujo completo de punta a punta
 
+> **No hace falta un payload especial para disparar el Human-in-the-loop.** En esta arquitectura
+> **toda** solicitud pausa: cuando el Supervisor da la investigación por cerrada, el grafo entra
+> al nodo `publicador`, que llama a `interrupt()` **antes** de ejecutar la única acción con
+> efecto secundario (`publicar_reporte`). Publicar un reporte es en sí misma la acción crítica —
+> irreversible una vez hecha y con costo asociado — así que no hay "tareas críticas" y "tareas
+> normales" a distinguir: cualquier `POST /tasks` termina en `AWAITING_APPROVAL` y requiere un
+> `POST /tasks/{id}/approve` para completarse.
+
 ```bash
 # 1. Encolar (responde en milisegundos)
 curl -s -X POST http://localhost:8000/tasks \
@@ -305,17 +310,28 @@ Dashboard: https://smith.langchain.com → proyecto `entrega-7-orquestador`.
 
 | Archivo | Qué muestra |
 |---|---|
-| `Entrega7_Nodes_interrupt.png` | El árbol de nodos de una ejecución completa (`supervisor` ⇄ `investigador` ⇄ `analista` → `publicador`) con el `GraphInterrupt` y su payload de aprobación, más la trace del resume posterior. |
+| `Entrega7_Nodes_interrupt.png` | El árbol de nodos de una ejecución completa (`supervisor` ⇄ `investigador` ⇄ `analista` → `publicador`) con el `GraphInterrupt` y su payload de aprobación. |
+| `Entrega7_Trace_Details.png` | Vista de detalle de una traza individual: costo desglosado por tipo de token (input/output/reasoning), latencia e input/output completos de esa ejecución. |
 | `Entrega7_costs_per_run_and_latency.jpeg` | Las 5 ejecuciones concurrentes con **costo y latencia por ejecución**, tokens y estado. |
 | `Entrega7_Latency_P95.png` | Chart de **latencia p95** del dashboard. |
 | `Entrega7_Latency_P99.png` | Chart de latencia p99, como contraste. |
 
-Sobre `Entrega7_Nodes_interrupt.png`: la pestaña **Error** de esa trace muestra un
-`GraphInterrupt`. **No es un fallo** — es el mecanismo de `interrupt()`: LangGraph pausa el
-grafo levantando esa excepción, la captura el runtime y persiste el checkpoint. La run figura
-como `success` y el job queda en `AWAITING_APPROVAL`. Se ve también el nodo `publicador` en
-`0.00s` (interrumpió sin llegar a publicar) y, debajo, la segunda trace de `0.06s`: el resume
-tras la aprobación, que sí ejecuta `publicar_reporte`.
+![El árbol de nodos de una ejecución completa con el GraphInterrupt del nodo HITL](screenshots/Entrega7_Nodes_interrupt.png)
+
+Sobre esta captura: la pestaña **Error** de esa trace muestra un `GraphInterrupt`. **No es un
+fallo** — es el mecanismo de `interrupt()`: LangGraph pausa el grafo levantando esa excepción, la
+captura el runtime y persiste el checkpoint. La run figura como `success` y el job queda en
+`AWAITING_APPROVAL`. Se ve también el nodo `publicador` en `0.00s` (interrumpió sin llegar a
+publicar) y, debajo, la segunda trace del resume tras la aprobación, que sí ejecuta
+`publicar_reporte`.
+
+![Vista de detalle de una traza individual: costo por token, latencia e input/output](screenshots/Entrega7_Trace_Details.png)
+
+![Las 5 ejecuciones concurrentes en LangSmith con costo, tokens y latencia por ejecución](screenshots/Entrega7_costs_per_run_and_latency.jpeg)
+
+![Chart de latencia p95 del dashboard de LangSmith](screenshots/Entrega7_Latency_P95.png)
+
+![Chart de latencia p99 del dashboard de LangSmith, como contraste](screenshots/Entrega7_Latency_P99.png)
 
 ### Resultados de la corrida
 
@@ -323,22 +339,22 @@ Corrida del 2026-09-03, 5 peticiones concurrentes vía `scripts/load_test.py`.
 
 | Métrica | Valor |
 |---|---|
-| Latencias por ejecución, ordenadas (s) | `77.63`, `83.98`, `84.12`, `85.16`, `143.62` |
-| p50 (s) | `84.12` |
-| **p95 (s)** | **`131.9`** &nbsp;← `85.16 + 0.8 × (143.62 − 85.16)` |
+| Latencias por ejecución, ordenadas (s) | `77.6`, `84.0`, `84.1`, `85.2`, `143.6` |
+| p50 (s) | `84.1` |
+| **p95 (s)** | **`131.9`** &nbsp;← `85.2 + 0.8 × (143.6 − 85.2)` |
 | p99 (s) | `141.3` |
-| máximo (s) | `143.62` |
+| máximo (s) | `143.6` |
 | **Costo por ejecución (USD)** | **`$0.1944`** |
 | Costo total de la corrida (USD) | `$0.9719` |
 | Tokens totales | `331.159` |
 
-Latencia y costo por ejecución salen de las 5 *root runs* del proyecto, visibles una por una en
-`Entrega7_costs_per_run_and_latency.jpeg`. Los percentiles se calculan sobre esas 5 muestras con
-interpolación lineal (`índice = p × (n−1)`), reproducible con:
+Latencia y costo salen de las 5 *root runs* del proyecto en LangSmith. Como los charts del
+dashboard no ofrecen p95, los percentiles se calculan sobre esas 5 muestras con interpolación
+lineal (`índice = p × (n−1)`), reproducible con:
 
 ```python
 from langsmith import Client
-runs = [r for r in Client().list_runs(project_name="entrega-7-orquestador") if r.name == "LangGraph"]
+runs = list(Client().list_runs(project_name="entrega-7-orquestador", is_root=True))
 lat = sorted((r.end_time - r.start_time).total_seconds() for r in runs)
 i = 0.95 * (len(lat) - 1); lo = int(i)
 p95 = lat[lo] + (i - lo) * (lat[lo + 1] - lat[lo])
@@ -354,31 +370,23 @@ desde el arranque del grafo en el background task.
 docker exec entrega7-redis redis-cli --scan --pattern 'job:*'   | xargs -I{} docker exec entrega7-redis redis-cli HMGET {} creado_en actualizado_en status
 ```
 
-### Por qué el número reportado no es el del chart
-
-Los charts de percentil del dashboard (`Entrega7_Latency_P95.png` y `..._P99.png`) muestran
-**ambos ~85 s**, y ese valor no puede corresponder a estas 5 ejecuciones: sobre esa población
-p95 y p99 dan `131.9 s` y `141.3 s`, que son distintos entre sí. Los ~85 s coinciden con el
-máximo de las **cuatro ejecuciones más rápidas** (`85.16 s`), o sea que la agregación del chart
-está dejando afuera la ejecución de `143.62 s`.
-
-Dos cosas a tener en cuenta al armar estos charts, ambas verificadas acá:
-
-- **Filtrá a las traces raíz.** Estas 5 ejecuciones generaron **353 runs** en el proyecto
-  (258 `chain`, 45 `llm`, 33 `tool`, 17 `parser`): cada trace se descompone en spans anidados y
-  un chart sin filtrar los cuenta a todos como ejecuciones. En **Filter & group**, usá
-  **`Name` `is` `LangGraph`** — es el nombre de la run raíz y ninguna hija lo comparte (las
-  hijas son `supervisor`, `investigador`, `ChatAnthropic`, `tavily_search`…), así que
-  selecciona exactamente las 5.
-- **Acotá el rango temporal a la ventana de la corrida.** Cada aprobación o rechazo reanuda el
-  grafo y ese resume genera *otra* run raíz llamada `LangGraph`, de ~0.1 s. Con dos
-  aprobaciones hechas, el filtro por nombre pasa a contar 7 runs y el p95 cae de `131.9 s` a
-  `126.1 s`.
-
-Por eso la tabla de arriba reporta el percentil calculado sobre las latencias por ejecución —
-que son auditables una por una en la captura de traces — y no la lectura del chart.
-
----
+> **Ojo al armar el chart de latencia: filtralo a root runs.** Estas 5 ejecuciones generaron
+> **353 runs** en el proyecto (258 `chain`, 45 `llm`, 33 `tool`, 17 `parser`): cada trace se
+> descompone en spans anidados, y un chart sin filtrar los cuenta a todos como si fueran
+> ejecuciones. El percentil sale del conjunto equivocado — p99 sobre las 353 da `80.7 s`,
+> contra `141.3 s` sobre las 5 traces reales. En **Filter & group** del chart, filtrá por
+> *root runs* antes de capturar.
+>
+> Si ese filtro no toma efecto, usá **`Name` `is` `LangGraph`**: es el nombre de la run raíz del
+> grafo y ninguna run hija lo comparte (las hijas se llaman `supervisor`, `investigador`,
+> `ChatAnthropic`, `tavily_search`, etc.), así que selecciona exactamente las 5 ejecuciones.
+> Para verificar que el filtro entró, el chart tiene que estar contando 5 runs y no 353.
+>
+> **Y acotá el rango temporal del dashboard a la ventana de la prueba de carga.** Cada
+> aprobación o rechazo reanuda el grafo, y ese resume genera *otra* run raíz llamada
+> `LangGraph` de ~0.1 s (el nodo `publicador` no llama a ningún LLM). Con dos aprobaciones ya
+> hechas, el filtro por nombre pasa a contar 7 runs y el p95 cae de `131.9 s` a `126.1 s`. El
+> rango temporal es lo que separa las 5 ejecuciones concurrentes de los resume posteriores.
 
 ### Lectura del dashboard: dónde se va el tiempo y los tokens
 
@@ -404,7 +412,7 @@ Cuatro lecturas:
    (`_digest_contribuciones`), nunca el `messages` completo ni los `detalle`.
 3. **`investigador` y `analista` corrieron 6 veces sobre 5 traces**: una tarea necesitó una
    segunda ronda porque el Analista devolvió `FUENTES INSUFICIENTES` y el Supervisor lo
-   reruteó (regla 4 de la rúbrica). Es la trace de 143.62 s, y se ve en
+   reruteó (regla 4 de la rúbrica). Es la trace de 143.6 s, y se ve en
    `Entrega7_Nodes_interrupt.png`: el ciclo `investigador → analista → investigador → analista`.
    Esa sola ronda extra explica la diferencia entre el p50 (84 s) y el p95 (131.9 s) — **la cola
    de latencia es el reruteo del Supervisor, no la concurrencia ni la infraestructura**.
